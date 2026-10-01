@@ -161,7 +161,13 @@ class Session:
         if check_auth:
             landed = urlparse(r.url).path
             asked = urlparse(self.url(path)).path
-            if r.status_code == 401 or (landed in ('/', '/login') and asked not in ('/', '/login')):
+            if r.status_code == 401:
+                try:
+                    why = r.json().get('warning') or r.json().get('error')
+                except (ValueError, AttributeError):
+                    why = None
+                raise AuthError(f'{method} {path}: ' + (why or 'not logged in, or the cookie expired'))
+            if landed in ('/', '/login') and asked not in ('/', '/login'):
                 raise AuthError(f'{method} {path}: not logged in, or the cookie expired')
         return r
 

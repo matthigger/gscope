@@ -66,9 +66,10 @@ def default_state():
 class FakeGradescope:
     """Quacks like requests.Session for Session.request()."""
 
-    def __init__(self, state=None, logged_in=True):
+    def __init__(self, state=None, logged_in=True, sso=True):
         self.state = state or default_state()
         self.logged_in = logged_in
+        self.sso = sso                      # False: a session not from single sign-on
         self.cookies = requests.cookies.RequestsCookieJar()
         self.headers = {}
         self.calls = []                     # (method, path, body or None, headers)
@@ -124,6 +125,9 @@ class FakeGradescope:
         return Resp(url, 200, page('Your Courses').replace('</body>', boxes + '</body>'))
 
     def course_page(self, url, body, cid):
+        if not self.sso and int(cid) in self.state.get('sso_only', ()):
+            return Resp(url, 401, json.dumps({'warning': f'{self.state["courses"][int(cid)]["shortname"]} can '
+                                              'only be accessed by logging in through your LMS or Single Sign-On.'}))
         rows = [{'type': 'assignment', 'id': f'assignment_{aid}', 'title': a['title'],
                  'url': f'/courses/{cid}/assignments/{aid}', 'total_points': '20.0',
                  'num_active_submissions': 7, 'grading_progress': 0.0, 'is_published': False}

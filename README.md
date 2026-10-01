@@ -1,9 +1,10 @@
 # gscope
 
 An unofficial, instructor-side Gradescope client for Python and the command
-line.  It reads courses, assignments, outlines and rubrics, and pushes rubric
-items from a spec file, so a rubric written once in a document goes up to every
-version of a quiz without retyping.
+line.  It reads courses, assignments, outlines and rubrics.  It also sets up
+scanned quizzes from one file: it creates the assignments, saves their outlines,
+pushes rubric items written once in a document, and uploads the scans, so
+graders can start without anyone clicking through each version.
 
     pip install gscope-cli
 
@@ -17,15 +18,32 @@ The package installs the `gscope` command and the `gscope` Python module.
 
 ## Logging in
 
-gscope uses the session cookie from a browser where you are already logged
-in.  That works with single sign-on (school) accounts, which have no
-Gradescope password.
+Log in to Gradescope in your browser as usual, then:
 
-1. Open any gradescope.com page while logged in, and open DevTools (F12).
+    pip install "gscope-cli[browser]"
+    gscope login                     # Brave; or --browser chrome|chromium|firefox
+
+`gscope login` copies the session cookie out of the browser's profile (snap
+and flatpak installs included), checks it, and saves it to
+`~/.config/gscope/cookie`, readable only by you.  Every other command reads it
+from there.  When it stops working, commands say so: open gradescope.com in the
+browser and run `gscope login` again.  Set `$GSCOPE_BROWSER` to change the
+default browser.
+
+**Single sign-on courses.**  A course can be set to accept only school (SSO)
+logins.  A browser session that Gradescope restored from "remember me" lists
+such a course, but cannot open it.  `gscope login` checks your newest course
+and says when this happens.  To fix it, log out of Gradescope in the browser,
+log back in with School Credentials, and rerun `gscope login`.
+
+Chrome and Brave encrypt cookies with a key in your desktop keyring, so the
+first run may ask for permission.
+
+**Without browser access**, `gscope login --paste` takes the Cookie header by hand:
+1. Open DevTools (F12) on any gradescope.com page.
 2. Go to the **Network** tab and reload the page.
-3. Click the first `www.gradescope.com` request.  Under **Request Headers**,
-   copy the whole value of **Cookie**.
-4. Save it to `~/.config/gscope/cookie`, then `chmod 600` that file.
+3. Click the first `www.gradescope.com` request.
+4. Copy the whole **Cookie** value under **Request Headers**, and paste it in.
 
 gscope looks for the cookie in, in order:
 - `--cookie FILE`
@@ -33,14 +51,13 @@ gscope looks for the cookie in, in order:
 - `$GSCOPE_COOKIE_FILE`
 - `~/.config/gscope/cookie`
 
-Logging out of Gradescope in the browser ends the session, and the cookie
-stops working.
-
-Accounts with a Gradescope password can also use
+Logging out of Gradescope in the browser ends that session, and the saved
+cookie stops working.  Accounts with a Gradescope password can also use
 `gscope.Session.login(email, password)` from Python.
 
 ## Command line
 
+    gscope login [--browser B] [--paste]   # save the session cookie (see above)
     gscope courses                         # id and name of every course
     gscope assignments COURSE              # points, submissions, % graded
     gscope questions COURSE ASSIGNMENT     # question tree, points, scoring type

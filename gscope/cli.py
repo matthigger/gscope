@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import getpass
 import json
+import os
 import sys
 
-from . import __version__, assignment, course, outline, rubric, scans, setup, spec, submissions
+from . import __version__, assignment, course, login, outline, rubric, scans, setup, spec, submissions
 from .session import AuthError, GradescopeError, Session
 
 
@@ -199,14 +201,39 @@ def cmd_setup(args):
         print('\ndry run; rerun with --apply')
 
 
+def cmd_login(args):
+    out = args.output or args.cookie or os.environ.get('GSCOPE_COOKIE_FILE') or login.DEFAULT_COOKIE_FILE
+    cookie = None
+    if args.paste:
+        if sys.stdin.isatty():
+            cookie = getpass.getpass('Paste the Cookie header (hidden), then Enter: ')
+        else:
+            cookie = sys.stdin.read()
+        if not cookie.strip():
+            raise AuthError('no cookie given')
+    else:
+        print(f'reading the gradescope.com cookie from {args.browser}...', file=sys.stderr)
+    path, n = login.login(args.browser, cookie, args.cookie_db, out)
+    print(f'logged in: {n} courses visible; cookie saved to {path}')
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog='gscope', description=__doc__,
-        epilog='Auth: the Cookie header from a logged-in browser, read from --cookie FILE, '
+        epilog='Sign in with "gscope login", which copies the session cookie from a browser '
+               'where you are logged in to Gradescope.  Commands then read it from --cookie FILE, '
                '$GSCOPE_COOKIE, $GSCOPE_COOKIE_FILE, or ~/.config/gscope/cookie.')
     p.add_argument('-V', '--version', action='version', version=f'gscope {__version__}')
     p.add_argument('--cookie', metavar='FILE', help='file holding the Cookie header')
     sub = p.add_subparsers(dest='cmd', required=True)
+
+    a = sub.add_parser('login', help='save the Gradescope cookie from your browser (or pasted)')
+    a.add_argument('--browser', choices=login.BROWSERS, default=os.environ.get('GSCOPE_BROWSER', 'brave'),
+                   help='browser you are logged in with (default $GSCOPE_BROWSER or brave)')
+    a.add_argument('--cookie-db', metavar='PATH', help="the browser's cookie database, if not found")
+    a.add_argument('--paste', action='store_true', help='paste the Cookie header from DevTools instead')
+    a.add_argument('-o', '--output', help='where to save it (default ~/.config/gscope/cookie)')
+    a.set_defaults(func=cmd_login)
 
     sub.add_parser('courses', help='list your courses').set_defaults(func=cmd_courses)
 
@@ -313,7 +340,13 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
-    except (AuthError, GradescopeError, ValueError) as e:
+    except AuthError as e:
+        print(f'gscope: {e}', file=sys.stderr)
+        if args.cmd != 'login':
+            print('gscope: sign in with "gscope login" (log in to Gradescope in your browser first)',
+                  file=sys.stderr)
+        return 1
+    except (GradescopeError, ValueError) as e:
         print(f'gscope: {e}', file=sys.stderr)
         return 1
     return 0

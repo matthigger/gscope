@@ -1,6 +1,6 @@
 [project]
 name = "gscope-cli"
-version = "0.2.0"
+version = "0.3.0"
 description = "Unofficial instructor-side Gradescope client: read outlines, push rubrics, from Python or the command line."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -18,6 +18,8 @@ classifiers = [
 dependencies = ["requests>=2.25"]
 
 [project.optional-dependencies]
+# Read the session cookie from a local browser profile (gscope login).
+browser = ["browser_cookie3>=0.19"]
 # Bridge from pset (LaTeX problem repos) to Gradescope outlines and rubrics.
 # Not implemented yet; the extra is reserved so the install syntax is stable.
 pset = ["pset>=0.6"]
