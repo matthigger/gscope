@@ -187,7 +187,8 @@ class Session:
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json',
                    'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-Token': self.csrf(),
                    'Referer': self.url(referer or path)}
-        r = self.request(method, path, data=json.dumps(body), headers=headers)
+        data = None if body is None else json.dumps(body)
+        r = self.request(method, path, data=data, headers=headers)
         if r.status_code not in (200, 201, 204):
             raise GradescopeError(f'{method} {path}: HTTP {r.status_code}: {r.text[:300]}')
         if not r.content:

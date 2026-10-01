@@ -65,10 +65,16 @@ class SpecItem:
 
 @dataclass
 class SpecQuestion:
-    assignment_id: int
-    question_id: int
+    assignment_id: object       # int id, or the assignment's exact title
+    question_id: object         # int id, or its number ("1", "2.1") or exact title
     items: list[SpecItem]
     label: str = ''
+
+
+def only_default(q: Question) -> bool:
+    """True when a question's rubric is just the "Correct" (0 pts) item Gradescope
+    adds to every new question."""
+    return len(q.items) == 1 and q.items[0].description.strip() == 'Correct' and q.items[0].weight == 0
 
 
 @dataclass
@@ -76,6 +82,7 @@ class PlanEntry:
     spec: SpecQuestion
     question: Question
     create: list[dict] = field(default_factory=list)    # rubric_item bodies, weights converted
+    delete: list[int] = field(default_factory=list)     # Gradescope's default item, replaced
     skip: str = ''                                      # why nothing will be written
 
     def describe(self) -> list[str]:
@@ -85,13 +92,40 @@ class PlanEntry:
         lines = [head]
         if self.skip:
             lines.append(f'    SKIP: {self.skip}')
+        if self.delete:
+            lines.append('    replaces the default "Correct" item')
         for it, body in zip(self.spec.items, self.create):
             lines.append(f"    {it.points:+g} (weight {body['weight']:g})  {it.description[:90]}")
         return lines
 
 
+def resolve(s: Session, course_id: int, spec: list[SpecQuestion]) -> list[SpecQuestion]:
+    """Turn assignment titles and question numbers/titles into ids."""
+    from . import course
+    titles = None
+    cache: dict[int, object] = {}
+    out = []
+    for sq in spec:
+        aid = sq.assignment_id
+        if not isinstance(aid, int):
+            if titles is None:
+                titles = {}
+                for a in course.assignments(s, course_id):
+                    titles.setdefault(a.title, []).append(a.id)
+            ids = titles.get(aid, [])
+            if len(ids) != 1:
+                raise ValueError(f'{sq.label or aid}: {len(ids)} assignments titled {aid!r}')
+            aid = ids[0]
+        if aid not in cache:
+            cache[aid] = load(s, course_id, aid)
+        q = cache[aid].find(sq.question_id)
+        out.append(SpecQuestion(aid, q.id, sq.items, sq.label))
+    return out
+
+
 def plan_push(s: Session, course_id: int, spec: list[SpecQuestion]) -> list[PlanEntry]:
     """What :func:`apply_push` would do.  Reads only."""
+    spec = resolve(s, course_id, spec)
     cache: dict[int, object] = {}
     plan = []
     for sq in spec:
@@ -101,9 +135,10 @@ def plan_push(s: Session, course_id: int, spec: list[SpecQuestion]) -> list[Plan
         e = PlanEntry(sq, q)
         if q.children:
             e.skip = 'question is a group; put rubric items on its parts'
-        elif q.items:
+        elif q.items and not only_default(q):
             e.skip = 'question already has rubric items (delete them first to re-push)'
         else:
+            e.delete = [i.id for i in q.items]
             e.create = [{'description': it.description,
                          'weight': points_to_weight(it.points, q.scoring_type)}
                         for it in sq.items]
@@ -118,6 +153,8 @@ def apply_push(s: Session, course_id: int, plan: list[PlanEntry]) -> list[list[R
         if e.skip:
             made.append([])
             continue
+        if e.delete:
+            delete_items(s, course_id, e.question.id, e.delete)
         made.append([create_item(s, course_id, e.question.id, b['description'], b['weight'])
                      for b in e.create])
     verify(s, course_id, [e for e in plan if not e.skip])
@@ -126,9 +163,12 @@ def apply_push(s: Session, course_id: int, plan: list[PlanEntry]) -> list[list[R
 
 def verify(s: Session, course_id: int, plan: list[PlanEntry]) -> None:
     """Raise unless each planned question now holds exactly the planned items, in order."""
-    bad = []
+    bad, cache = [], {}
     for e in plan:
-        q = load(s, course_id, e.spec.assignment_id).question(e.question.id)
+        aid = e.spec.assignment_id
+        if aid not in cache:
+            cache[aid] = load(s, course_id, aid)
+        q = cache[aid].question(e.question.id)
         live = [(i.description, i.weight) for i in q.items]
         want = [(b['description'], float(b['weight'])) for b in e.create]
         if live != want:

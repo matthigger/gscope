@@ -6,7 +6,7 @@ import csv
 import json
 import sys
 
-from . import __version__, assignment, course, rubric, spec
+from . import __version__, assignment, course, outline, rubric, scans, setup, spec, submissions
 from .session import AuthError, GradescopeError, Session
 
 
@@ -89,6 +89,116 @@ def cmd_scores(args):
                open(args.output, 'w', newline='') if args.output else sys.stdout)
 
 
+def _parts(text):
+    """"i:7,ii:7,iii:6" -> [{"title": "i", "weight": 7}, ...]"""
+    out = []
+    for chunk in text.split(','):
+        t, _, w = chunk.rpartition(':')
+        out.append({'title': t.strip(), 'weight': float(w)})
+    return out
+
+
+def cmd_assignment_create(args):
+    if not args.apply:
+        print(f'dry run: would create exam/quiz assignment {args.title!r} in course {args.course} '
+              f'from {args.template}; rerun with --apply')
+        return
+    aid = assignment.create_exam(_session(args), args.course, args.title, args.template)
+    print(f'created assignment {aid}: {args.title}')
+
+
+def cmd_assignment_delete(args):
+    s = _session(args)
+    a = assignment.load(s, args.course, args.assignment)
+    if args.confirm != a.title:
+        raise ValueError(f'to delete assignment {a.id} with its outline and all submissions, '
+                         f'pass --confirm "{a.title}"')
+    if not args.apply:
+        print(f'dry run: would delete assignment {a.id} {a.title!r}; rerun with --apply')
+        return
+    assignment.delete(s, args.course, a.id)
+    print(f'deleted assignment {a.id}: {a.title}')
+
+
+def cmd_outline_show(args):
+    cur = outline.current(_session(args), args.course, args.assignment)
+    print(json.dumps({'id_regions': cur['assignment'].get('id_regions'),
+                      'has_submissions_and_students': cur.get('has_submissions_and_students'),
+                      'outline': cur['outline']}, indent=1))
+
+
+def cmd_outline_guess(args):
+    q = {'title': args.title}
+    if args.parts:
+        q['parts'] = _parts(args.parts)
+    else:
+        q['weight'] = args.weight
+    o = outline.guess(args.template, [q], back=not args.no_back)
+    text = json.dumps(o.to_json(), indent=1)
+    if args.output:
+        with open(args.output, 'w') as f:
+            f.write(text + '\n')
+        print(f'wrote {args.output} ({o.total():g} pts)')
+    else:
+        print(text)
+
+
+def cmd_outline_push(args):
+    o = outline.load_spec(args.outline)
+    if not args.apply:
+        print(json.dumps(o.payload(), indent=1))
+        print(f'\ndry run: would save this outline ({o.total():g} pts) to assignment {args.assignment}; '
+              'rerun with --apply')
+        return
+    outline.push(_session(args), args.course, args.assignment, o, replace=args.replace)
+    print(f'saved outline ({o.total():g} pts) to assignment {args.assignment}')
+
+
+def cmd_scans_list(args):
+    for b in scans.batches(_session(args), args.course, args.assignment):
+        print(f'{b.id:>10}  {b.filename:<30} {b.page_count or 0:>4} pages  {b.num_submissions:>3} subs  '
+              f'{b.complete_status or ""} {b.status or ""}')
+
+
+def cmd_scans_upload(args):
+    if not args.apply:
+        print(f'dry run: would upload {len(args.pdf)} file(s) to assignment {args.assignment}; '
+              'rerun with --apply')
+        return
+    s = _session(args)
+    bs = [scans.upload(s, args.course, args.assignment, p) for p in args.pdf]
+    print(f'uploaded {len(bs)} file(s)')
+    if args.no_wait:
+        return
+    bs = scans.wait(s, args.course, args.assignment, [b.id for b in bs], timeout=args.timeout,
+                    progress=lambda bb: print('  ' + ', '.join(f'{b.filename}: {b.complete_status}' for b in bb)))
+    for b in bs:
+        note = 'split it by hand in Manage Scans' if b.needs_manual_split else ''
+        print(f'{b.filename}: {b.num_submissions} submissions {note}')
+
+
+def cmd_submissions(args):
+    s = _session(args)
+    subs = submissions.list_all(s, args.course, args.assignment)
+    un = [x for x in subs if not x.matched]
+    auto = sum(1 for x in subs if x.matched and x.automatic)
+    print(f'{len(subs)} submissions: {len(subs) - len(un)} matched ({auto} automatically), '
+          f'{len(un)} unmatched')
+    for x in un:
+        print(f'  unmatched submission {x.id} (batch {x.batch_id})')
+
+
+def cmd_setup(args):
+    qs = setup.QuizSetup.load(args.setup)
+    steps = tuple(args.steps.split(',')) if args.steps else setup.STEPS
+    bad = [x for x in steps if x not in setup.STEPS]
+    if bad:
+        raise ValueError(f'unknown steps {bad}; choose from {",".join(setup.STEPS)}')
+    setup.run(_session(args), qs, apply=args.apply, steps=steps)
+    if not args.apply:
+        print('\ndry run; rerun with --apply')
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog='gscope', description=__doc__,
@@ -124,6 +234,67 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument('--map', required=True)
     a.add_argument('-o', '--output')
     a.set_defaults(func=cmd_rubric_to_json)
+
+    g = sub.add_parser('assignment', help='create or delete assignments').add_subparsers(dest='acmd', required=True)
+    a = g.add_parser('create', help='create an "Exam / Quiz" assignment from a template PDF')
+    a.add_argument('course', type=int)
+    a.add_argument('title')
+    a.add_argument('template')
+    a.add_argument('--apply', action='store_true')
+    a.set_defaults(func=cmd_assignment_create)
+    a = g.add_parser('delete', help='delete an assignment and everything in it')
+    a.add_argument('course', type=int)
+    a.add_argument('assignment', type=int)
+    a.add_argument('--confirm', metavar='TITLE', help="the assignment's exact title")
+    a.add_argument('--apply', action='store_true')
+    a.set_defaults(func=cmd_assignment_delete)
+
+    g = sub.add_parser('outline', help='show, guess or save outlines').add_subparsers(dest='ocmd', required=True)
+    a = g.add_parser('show', help="an assignment's outline and name/SID regions, as JSON")
+    a.add_argument('course', type=int)
+    a.add_argument('assignment', type=int)
+    a.set_defaults(func=cmd_outline_show)
+    a = g.add_parser('guess', help='an outline JSON with regions found in a template PDF')
+    a.add_argument('template')
+    a.add_argument('--title', required=True)
+    w = a.add_mutually_exclusive_group(required=True)
+    w.add_argument('--weight', type=float, help='points, for a question without parts')
+    w.add_argument('--parts', help='part titles and points, e.g. "i:7,ii:7,iii:6"')
+    a.add_argument('--no-back', action='store_true', help="don't include the back page in the last region")
+    a.add_argument('-o', '--output')
+    a.set_defaults(func=cmd_outline_guess)
+    a = g.add_parser('push', help='save an outline JSON to an assignment')
+    a.add_argument('course', type=int)
+    a.add_argument('assignment', type=int)
+    a.add_argument('outline')
+    a.add_argument('--replace', action='store_true', help='allow deleting existing questions (never with submissions)')
+    a.add_argument('--apply', action='store_true')
+    a.set_defaults(func=cmd_outline_push)
+
+    g = sub.add_parser('scans', help='upload or list scanned PDFs').add_subparsers(dest='scmd', required=True)
+    a = g.add_parser('list', help="an assignment's uploaded scan batches")
+    a.add_argument('course', type=int)
+    a.add_argument('assignment', type=int)
+    a.set_defaults(func=cmd_scans_list)
+    a = g.add_parser('upload', help='upload scan PDFs and wait for them to be split')
+    a.add_argument('course', type=int)
+    a.add_argument('assignment', type=int)
+    a.add_argument('pdf', nargs='+')
+    a.add_argument('--no-wait', action='store_true')
+    a.add_argument('--timeout', type=float, default=1800)
+    a.add_argument('--apply', action='store_true')
+    a.set_defaults(func=cmd_scans_upload)
+
+    a = sub.add_parser('submissions', help='how many submissions are matched to students')
+    a.add_argument('course', type=int)
+    a.add_argument('assignment', type=int)
+    a.set_defaults(func=cmd_submissions)
+
+    a = sub.add_parser('setup', help='create, outline, score, rubric and upload a quiz from one file')
+    a.add_argument('setup', help='setup JSON (see gscope.setup)')
+    a.add_argument('--steps', help=f'comma list, default all: {",".join(setup.STEPS)}')
+    a.add_argument('--apply', action='store_true')
+    a.set_defaults(func=cmd_setup)
 
     a = sub.add_parser('roster', help="a course's roster as csv")
     a.add_argument('course', type=int)

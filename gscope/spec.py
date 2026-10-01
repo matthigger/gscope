@@ -17,8 +17,10 @@ headings under them, and rubric items as list lines ``- **<points>**: <text>``::
     - **-8**: Denominator missing or wrong.
 
 The question key is the heading's first word ("Q1").  A map file ties the keys
-to Gradescope ids: ``{"course_id": 123, "A": {"Q1": [456, 789]}}``, the pair being
-[assignment id, question id].  Sections not in the map (TA notes, ...) are ignored.
+to Gradescope questions: ``{"course_id": 123, "A": {"Q1": [456, 789]}}``, the pair
+being [assignment, question].  Either may be an id, or, so a map can be written
+before the assignments exist, the assignment's exact title and the question's
+number as Gradescope shows it: ``["quiz2a_q2", "1.2"]``.  Sections not in the map (TA notes, ...) are ignored.
 """
 from __future__ import annotations
 
@@ -51,6 +53,11 @@ def parse_markdown(md: str) -> dict[tuple[str, str], list[SpecItem]]:
     return out
 
 
+def _ref(x):
+    """Ids stay ints; titles and question numbers like "2.1" stay strings."""
+    return int(x) if isinstance(x, int) or (isinstance(x, str) and x.isdigit() and len(x) > 3) else str(x)
+
+
 def from_markdown(md: str, qmap: dict) -> tuple[int, list[SpecQuestion]]:
     """(course id, spec) from a rubric document plus its id map."""
     parsed = parse_markdown(md)
@@ -63,14 +70,14 @@ def from_markdown(md: str, qmap: dict) -> tuple[int, list[SpecQuestion]]:
             if not items:
                 missing.append(f'{group}/{key}')
                 continue
-            spec.append(SpecQuestion(int(aid), int(qid), items, label=f'{group} {key}'))
+            spec.append(SpecQuestion(_ref(aid), _ref(qid), items, label=f'{group} {key}'))
     if missing:
         raise ValueError(f'no rubric items in the document for: {", ".join(missing)}')
     return int(qmap['course_id']), spec
 
 
 def from_json(d: dict) -> tuple[int, list[SpecQuestion]]:
-    spec = [SpecQuestion(int(q['assignment_id']), int(q['question_id']),
+    spec = [SpecQuestion(_ref(q['assignment_id']), _ref(q['question_id']),
                          [SpecItem(float(i['points']), i['description']) for i in q['items']],
                          label=q.get('label', ''))
             for q in d['questions']]

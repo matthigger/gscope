@@ -47,6 +47,15 @@ Accounts with a Gradescope password can also use
     gscope rubric show COURSE ASSIGNMENT   # rubric items, as signed points
     gscope rubric push SPEC [--map MAP] [--apply]
     gscope rubric to-json RUBRIC.md --map MAP [-o SPEC.json]
+    gscope assignment create COURSE TITLE TEMPLATE.pdf [--apply]
+    gscope assignment delete COURSE ASSIGNMENT --confirm TITLE --apply
+    gscope outline show COURSE ASSIGNMENT
+    gscope outline guess TEMPLATE.pdf --parts "i:7,ii:7,iii:6" [-o OUTLINE.json]
+    gscope outline push COURSE ASSIGNMENT OUTLINE.json [--replace] [--apply]
+    gscope scans list COURSE ASSIGNMENT
+    gscope scans upload COURSE ASSIGNMENT SCAN.pdf... [--apply]
+    gscope submissions COURSE ASSIGNMENT   # who is matched, who is not
+    gscope setup SETUP.json [--steps create,outline,scoring,rubric,scans] [--apply]
     gscope roster COURSE [-o roster.csv]
     gscope scores COURSE ASSIGNMENT [-o scores.csv]
 
@@ -89,6 +98,50 @@ The map says where each section goes, as `[assignment id, question id]`:
 
 Sections the map doesn't mention, such as TA notes, are ignored.
 
+### Setting up a scanned quiz
+
+`gscope setup` takes one JSON file and does everything a scanned quiz needs
+before grading starts: it creates an "Exam / Quiz" assignment per template,
+saves each outline, sets the scoring type, pushes the rubric, uploads the scans,
+and reports which submissions still need matching to a student.
+
+```json
+{"course_id": 123456,
+ "scoring": "negative",
+ "assignments": [
+   {"title": "quiz2a_q1", "template": "templates/quiz2a_q1.pdf",
+    "questions": [{"title": "Covariance Matching", "weight": 20}],
+    "scans": ["scans/quiz2a_q1_*.pdf"]},
+   {"title": "quiz2a_q2", "template": "templates/quiz2a_q2.pdf",
+    "questions": [{"title": "Sample Covariance", "parts": [
+        {"title": "i", "weight": 7}, {"title": "ii", "weight": 7}, {"title": "iii", "weight": 6}]}]}],
+ "rubric": {"doc": "quiz2_rubric.md",
+            "map": {"A": {"Q1": ["quiz2a_q1", "1"], "Q2.1": ["quiz2a_q2", "1.1"]}}}}
+```
+
+Paths are relative to the setup file.  Rubric map entries name an assignment by
+title and a question by its number, so the map can be written before the
+assignments exist.  Every step is skipped once it is done, so you can rerun the
+same file as the quiz moves along: create the assignments now, push the rubric
+once it is written, and upload the scans once they exist.  Without `--apply`, it only
+reports what it would do.
+
+Outlines are guessed from the template PDF (this needs `pdftotext` from
+poppler).  The name and NUID boxes come from the "Name" and "NUID:" labels,
+the question runs from its "Problem" header down, and each part runs from its
+label (`i.`, `(a)`, `2.`) to the next one.  The last part also covers page 2, so
+graders see work that continued on the back.  Check the guess with
+`gscope outline guess ... -o outline.json` and put an explicit `"outline"` in
+the setup file when it is wrong.
+
+Gradescope splits uploaded scans by the template's page count, and matches
+them to students from the name and SID boxes.  `gscope submissions` lists the
+ones it could not match; fix those in Manage Submissions.
+
+New questions start with a 0-point "Correct" item.  `rubric push` replaces it,
+and the scoring step removes it from question groups (whose parts hold the
+rubric).
+
 ### Signs
 
 Specs write points the way a rubric reads: `-8` takes off 8 and `+2` adds 2.
@@ -119,7 +172,7 @@ rubric.delete_items(s, course_id, question_id, [item.id])
 | Courses, assignments, roster, scores | done |
 | Question tree, outline (read) | done |
 | Rubric items: create, update, delete, push spec | done |
-| Outline editing, creating assignments, uploading scans | planned |
+| Creating and deleting assignments, outline editing, uploading scans, matching | done |
 | Applying grades from a reviewed file | planned |
 | `gscope-cli[pset]`: outlines and rubrics from [pset](https://github.com/matthigger/pset) LaTeX problems | reserved, not built |
 
