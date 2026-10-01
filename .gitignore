@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Never commit credentials or course data
+*cookie*
+.env
+*.csv
+specs/
